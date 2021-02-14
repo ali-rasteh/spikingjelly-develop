@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 from spikingjelly.clock_driven import functional
+from abc import abstractmethod
 
 class NeuNorm(nn.Module):
     def __init__(self, in_channels, height, width, k=0.9, shared_across_channels=False):
@@ -930,7 +931,39 @@ class STDPLearner(nn.Module):
         else:
             raise NotImplementedError
 
+class FirstSpikePoolNd(nn.modules.pooling._MaxPoolNd):
+    def __init__(self, kernel_size, stride,
+                 padding=0, dilation=1,
+                 return_indices: bool = False, ceil_mode: bool = False) -> None:
+        super().__init__(kernel_size, stride, padding, dilation, return_indices, ceil_mode)
+        self.fire_mask = 0.
 
+    @abstractmethod
+    def max_pool(self, *args, **kwargs):
+        pass
+
+    def forward(self, spike: torch.Tensor):
+        out_spike = self.max_pool(spike, self.kernel_size, self.stride,
+                                  self.padding, self.dilation, self.return_indices, self.ceil_mode)
+        out_spike *= (1. - self.fire_mask)
+        with torch.no_grad():
+            self.fire_mask += out_spike
+        return out_spike
+
+    def reset(self):
+        self.fire_mask = 0.
+
+class FirstSpikePool1d(FirstSpikePoolNd):
+    def max_pool(self, *args, **kwargs):
+        return F.max_pool1d(*args, **kwargs)
+
+class FirstSpikePool2d(FirstSpikePoolNd):
+    def max_pool(self, *args, **kwargs):
+        return F.max_pool2d(*args, **kwargs)
+
+class FirstSpikePool3d(FirstSpikePoolNd):
+    def max_pool(self, *args, **kwargs):
+        return F.max_pool3d(*args, **kwargs)
 
 
 
