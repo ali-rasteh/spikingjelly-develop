@@ -59,11 +59,11 @@ class Net(nn.Module):
 
         out_spikes_counter = self.fc(self.conv(x))
         out_potential_counter = self.fc[4].v
-        latency_score = self.surrogate_function(out_spikes_counter)
+        latency_score = self.surrogate_function(out_spikes_counter-0.5)
         for t in range(1, self.T):
             out_spikes_counter = out_spikes_counter+self.fc(self.conv(x))
             out_potential_counter = out_potential_counter + self.fc[4].v
-            latency_score = latency_score + self.surrogate_function(out_spikes_counter)
+            latency_score = latency_score + self.surrogate_function(out_spikes_counter-0.5)
 
         # print(np.shape(self.conv[0].monitor['s']))
         # print(np.shape(self.conv[2].monitor['s']))
