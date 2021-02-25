@@ -350,29 +350,6 @@ class LIFNode(BaseNode):
         else:
             self.v += (dv - (self.v - self.v_reset)) / self.tau
 
-class ReadoutNode(BaseNode):
-    def __init__(self, tau=100.0, v_threshold=1000000.0, v_reset=0.0, surrogate_function=surrogate.Sigmoid(), detach_reset=False,
-                 monitor_state=False):
-        
-        super().__init__(v_threshold, v_reset, surrogate_function, detach_reset, monitor_state)
-        self.tau = tau
-
-    def extra_repr(self):
-        return f'v_threshold={self.v_threshold}, v_reset={self.v_reset}, tau={self.tau}'
-
-    def neuronal_charge(self, dv: torch.Tensor):
-        if self.v_reset is None:
-            self.v += (dv - self.v) / self.tau
-        else:
-            self.v += (dv - (self.v - self.v_reset)) / self.tau
-            
-    def forward(self, dv: torch.Tensor):
-
-        self.neuronal_charge(dv)
-        self.neuronal_fire()
-        self.neuronal_reset()
-        return self.v
-
 class OneSpikeIFNode(BaseNode):
     def __init__(self, v_threshold=1.0, v_reset=0.0, surrogate_function=surrogate.Sigmoid(), detach_reset=False,
                  monitor_state=False):

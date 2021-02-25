@@ -6,6 +6,7 @@ from spikingjelly.clock_driven import neuron, functional, surrogate, layer
 from torch.utils.tensorboard import SummaryWriter
 import sys
 import time
+import math
 
 if sys.platform != 'win32':
     import readline
@@ -23,6 +24,7 @@ class Net(nn.Module):
     def __init__(self, tau, T, v_threshold=1.0, v_reset=0.0, mode='latency'):
         super().__init__()
         self.T = T
+        self.deafult_T = 8
         self.surrogate_function = surrogate.ATan_binary()
         self.mode=mode
 
@@ -42,7 +44,7 @@ class Net(nn.Module):
 
         )
         if self.mode=='potential':
-            Readout_v_threshold = 10000000.0
+            Readout_v_threshold = math.inf
         else:
             Readout_v_threshold = v_threshold
         self.fc = nn.Sequential(
@@ -51,8 +53,24 @@ class Net(nn.Module):
             # neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), monitor_state=False),
             neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), monitor_state=False),
             nn.Linear(100, 10, bias=False),
-            neuron.IFNode(v_threshold=Readout_v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), monitor_state=False)
+            # neuron.IFNode(v_threshold=Readout_v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), monitor_state=False)
+            neuron.OneSpikeIFNode(v_threshold=Readout_v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), monitor_state=False)
+            # layer.SynapseFilter(tau=tau, learnable=False)
         )
+
+        for module in self.static_conv:
+            if hasattr(module, 'weight'):
+                # with torch.no_grad():
+                module.weight = nn.Parameter(module.weight*(self.deafult_T/self.T))
+                # module.weight = nn.Parameter(torch.mul(module.weight,(self.deafult_T/self.T)))
+        for module in self.conv:
+            if hasattr(module, 'weight'):
+                module.weight = nn.Parameter(module.weight * (self.deafult_T / self.T))
+        for module in self.fc:
+            if hasattr(module, 'weight'):
+                module.weight = nn.Parameter(module.weight * (self.deafult_T / self.T))
+
+
 
     def forward(self, x):
         x = self.static_conv(x)
