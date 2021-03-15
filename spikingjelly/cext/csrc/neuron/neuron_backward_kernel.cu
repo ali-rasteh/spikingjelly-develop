@@ -407,3 +407,158 @@ std::vector<at::Tensor> IF_bptt(
 
   return {grad_x_seq, grad_v};
 }
+
+
+//OneSpikeIF bp----------------------------------------------------
+__global__ void OneSpikeIF_backward_cuda_kernel(
+  float* __restrict__ grad_x, float* __restrict__ grad_v, float* __restrict__ grad_m,
+  const float* __restrict__ grad_spike, const float* __restrict__ grad_v_next, const float* __restrict__ grad_fire_mask_next, const float* __restrict__ grad_s_to_h, const float* __restrict__ grad_v_to_h, const float* __restrict__ grad_s_to_m_last, const float* __restrict__ grad_v_to_m_last,
+  const int size)
+{
+  const int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index < size)
+  {
+    const float grad_h = grad_v_next[index] * grad_v_to_h[index] + (grad_spike[index] + grad_fire_mask_next[index]) * grad_s_to_h[index];
+    grad_x[index] = grad_h;
+    grad_v[index] = grad_h;
+    grad_m[index] = (grad_fire_mask_next[index] + grad_spike[index]) * grad_s_to_m_last[index] + grad_v_next[index] * grad_v_to_m_last[index] + grad_fire_mask_next[index];
+  }
+}
+
+__global__ void OneSpikeIF_backward_cuda_kernel_half(
+  at::Half* __restrict__ grad_x, at::Half* __restrict__ grad_v, at::Half* __restrict__ grad_m,
+  const at::Half* __restrict__ grad_spike, const at::Half* __restrict__ grad_v_next, const at::Half* __restrict__ grad_fire_mask_next, const at::Half* __restrict__ grad_s_to_h, const at::Half* __restrict__ grad_v_to_h, const at::Half* __restrict__ grad_s_to_m_last, const at::Half* __restrict__ grad_v_to_m_last,
+  const int size)
+{
+  const int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index < size)
+  {
+    const half grad_h = __hfma(grad_v_next[index], grad_v_to_h[index], __hmul(__hadd((half) grad_fire_mask_next[index], (half) grad_spike[index]), grad_s_to_h[index]));
+    grad_x[index] = grad_h;
+    grad_v[index] = grad_h;
+    grad_m[index] =  __hadd(__hfma(grad_v_next[index], grad_v_to_m_last[index], __hmul(__hadd((half) grad_fire_mask_next[index], (half) grad_spike[index]), grad_s_to_m_last[index])), (half) grad_fire_mask_next[index]);
+  }
+}
+
+
+std::vector<at::Tensor> OneSpikeIF_backward(
+  torch::Tensor & grad_spike, torch::Tensor & grad_v_next, torch::Tensor & grad_fire_mask_next, torch::Tensor & grad_s_to_h, torch::Tensor & grad_v_to_h, torch::Tensor & grad_s_to_m_last, torch::Tensor & grad_v_to_m_last)
+{
+  CHECK_TENSOR(grad_spike);
+  CHECK_TENSOR(grad_v_next);
+  CHECK_TENSOR(grad_fire_mask_next);
+  CHECK_TENSOR(grad_s_to_h);
+  CHECK_TENSOR(grad_v_to_h);
+  CHECK_TENSOR(grad_s_to_m_last);
+  CHECK_TENSOR(grad_v_to_m_last);
+  auto grad_x = torch::zeros_like(grad_spike.data());
+  auto grad_v = grad_x.data().clone();
+  auto grad_m = grad_x.data().clone();
+  CHECK_TENSOR(grad_x);
+  CHECK_TENSOR(grad_v);
+  CHECK_TENSOR(grad_m);
+  const int size = grad_spike.numel();
+  const int threads = THREADS;
+  const int blocks = (size + threads - 1) / threads;
+  CHECK_CUDA_OPERATION(cudaSetDevice(grad_spike.get_device()));
+  if (grad_spike.scalar_type() == c10::ScalarType::Float)
+  {
+    OneSpikeIF_backward_cuda_kernel<<<blocks, threads>>>(
+      grad_x.data_ptr<float>(), grad_v.data_ptr<float>(), grad_m.data_ptr<float>(),
+      grad_spike.data_ptr<float>(), grad_v_next.data_ptr<float>(), grad_fire_mask_next.data_ptr<float>(), grad_s_to_h.data_ptr<float>(), grad_v_to_h.data_ptr<float>(), grad_s_to_m_last.data_ptr<float>(), grad_v_to_m_last.data_ptr<float>(),
+      size);
+  }
+  else if (grad_spike.scalar_type() == c10::ScalarType::Half)
+  {
+    OneSpikeIF_backward_cuda_kernel_half<<<blocks, threads>>>(
+      grad_x.data_ptr<at::Half>(), grad_v.data_ptr<at::Half>(), grad_m.data_ptr<at::Half>(),
+      grad_spike.data_ptr<at::Half>(), grad_v_next.data_ptr<at::Half>(), grad_fire_mask_next.data_ptr<at::Half>(), grad_s_to_h.data_ptr<at::Half>(), grad_v_to_h.data_ptr<at::Half>(), grad_s_to_m_last.data_ptr<at::Half>(), grad_v_to_m_last.data_ptr<at::Half>(),
+      size);
+  }
+
+
+  return {grad_x, grad_v, grad_m};
+}
+
+//OneSpikeIF bptt----------------------------------------------------
+
+__global__ void OneSpikeIF_bptt_cuda_kernel(
+float* __restrict__ grad_x_seq, float* __restrict__ grad_v, float* __restrict__ grad_m,
+const float* __restrict__ grad_spike_seq, const float* __restrict__ grad_s_to_h, const float* __restrict__ grad_v_to_h, const float* __restrict__ grad_s_to_m_last, const float* __restrict__ grad_v_to_m_last,
+const int neuron_num, const int size)
+{
+  const int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index < neuron_num)
+  {
+    for(int mem_offset = size - neuron_num; mem_offset >= 0; mem_offset -= neuron_num)
+    {
+      const int mem_index = index + mem_offset;
+
+      const float grad_h = grad_v[index] * grad_v_to_h[mem_index] + (grad_spike_seq[mem_index] + grad_m[index]) * grad_s_to_h[mem_index];
+      grad_m[index] += (grad_m[index] + grad_spike_seq[mem_index]) * grad_s_to_m_last[mem_index] + grad_v[index] * grad_v_to_m_last[mem_index];
+      grad_x_seq[mem_index] = grad_h;
+      grad_v[index] = grad_h;
+    }
+  }
+}
+
+__global__ void OneSpikeIF_bptt_cuda_kernel_half(
+  at::Half* __restrict__ grad_x_seq, at::Half* __restrict__ grad_v, at::Half* __restrict__ grad_m,
+  const at::Half* __restrict__ grad_spike_seq, const at::Half* __restrict__ grad_s_to_h, const at::Half* __restrict__ grad_v_to_h, const at::Half* __restrict__ grad_s_to_m_last, const at::Half* __restrict__ grad_v_to_m_last,
+  const int neuron_num, const int size)
+  {
+    const int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < neuron_num)
+    {
+      for(int mem_offset = size - neuron_num; mem_offset >= 0; mem_offset -= neuron_num)
+      {
+        const int mem_index = index + mem_offset;
+        const half grad_h = __hfma(grad_v[index], grad_v_to_h[mem_index], __hmul(__hadd((half) grad_m[index], (half) grad_spike_seq[mem_index]), grad_s_to_h[mem_index]));
+        grad_m[index] = __hadd((half) grad_m[index], __hfma(grad_v[index], grad_v_to_m_last[mem_index], __hmul(__hadd((half) grad_m[index], (half) grad_spike_seq[mem_index]), grad_s_to_m_last[mem_index])));
+        grad_x_seq[mem_index] = grad_h;
+        grad_v[index] = grad_h;
+        
+      }
+    }
+  }
+
+std::vector<at::Tensor> OneSpikeIF_bptt(
+  torch::Tensor & grad_spike_seq, torch::Tensor & grad_v_next, torch::Tensor & grad_fire_mask_next,
+  torch::Tensor & grad_s_to_h, torch::Tensor & grad_v_to_h, torch::Tensor & grad_s_to_m_last, torch::Tensor & grad_v_to_m_last)
+{
+  CHECK_TENSOR(grad_spike_seq);
+  CHECK_TENSOR(grad_v_next);
+  CHECK_TENSOR(grad_fire_mask_next);
+  CHECK_TENSOR(grad_s_to_h);
+  CHECK_TENSOR(grad_v_to_h);
+  CHECK_TENSOR(grad_s_to_m_last);
+  CHECK_TENSOR(grad_v_to_m_last);
+  auto grad_x_seq = torch::zeros_like(grad_spike_seq.data());
+  auto grad_v = grad_v_next.data().clone();
+  auto grad_m = grad_fire_mask_next.data().clone();
+  CHECK_TENSOR(grad_x_seq);
+  CHECK_TENSOR(grad_v);
+  CHECK_TENSOR(grad_m);
+  CHECK_CUDA_OPERATION(cudaSetDevice(grad_spike_seq.get_device()));
+  const int seq_len = grad_spike_seq.size(0);
+  const int size = grad_spike_seq.numel();
+  const int threads = THREADS;
+  const int neuron_num = size / seq_len;
+  const int blocks = (neuron_num + threads - 1) / threads;
+  if (grad_x_seq.scalar_type() == c10::ScalarType::Float)
+  {
+    OneSpikeIF_bptt_cuda_kernel<<<blocks, threads>>>(
+      grad_x_seq.data_ptr<float>(), grad_v.data_ptr<float>(), grad_m.data_ptr<float>(),
+      grad_spike_seq.data_ptr<float>(), grad_s_to_h.data_ptr<float>(), grad_v_to_h.data_ptr<float>(), grad_s_to_m_last.data_ptr<float>(), grad_v_to_m_last.data_ptr<float>(),
+      neuron_num, size);
+  }
+  else if (grad_x_seq.scalar_type() == c10::ScalarType::Half)
+  {
+    OneSpikeIF_bptt_cuda_kernel_half<<<blocks, threads>>>(
+      grad_x_seq.data_ptr<at::Half>(), grad_v.data_ptr<at::Half>(), grad_m.data_ptr<at::Half>(),
+      grad_spike_seq.data_ptr<at::Half>(), grad_s_to_h.data_ptr<at::Half>(), grad_v_to_h.data_ptr<at::Half>(), grad_s_to_m_last.data_ptr<at::Half>(), grad_v_to_m_last.data_ptr<at::Half>(),
+      neuron_num, size);
+  }
+
+  return {grad_x_seq, grad_v, grad_m};
+}

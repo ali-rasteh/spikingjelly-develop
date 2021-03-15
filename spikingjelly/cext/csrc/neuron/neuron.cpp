@@ -52,6 +52,28 @@ std::vector<at::Tensor> IF_bptt(
     torch::Tensor & grad_spike_seq, torch::Tensor & grad_v_next,
     torch::Tensor & grad_s_to_h, torch::Tensor & grad_v_to_h);
 
+
+//OneSpikeIF----------------------------------------------------
+
+std::vector<at::Tensor> OneSpikeIF_hard_reset_forward(torch::Tensor & x, torch::Tensor & v, torch::Tensor & fire_mask, const float & v_th, const float & v_reset);
+
+std::vector<at::Tensor> OneSpikeIF_hard_reset_forward_with_grad(torch::Tensor & x, torch::Tensor & v, torch::Tensor & fire_mask, const float & v_th, const float & v_reset,
+  const float & alpha, const bool & detach_reset, const int & grad_surrogate_function_index);
+
+std::vector<at::Tensor> OneSpikeIF_hard_reset_fptt(torch::Tensor & x_seq, torch::Tensor & v, torch::Tensor & fire_mask, const float & v_th, const float & v_reset);
+
+
+std::vector<at::Tensor> OneSpikeIF_hard_reset_fptt_with_grad(torch::Tensor & x_seq, torch::Tensor & v, torch::Tensor & fire_mask, const float & v_th, const float & v_reset, 
+  const float & alpha, const bool & detach_reset, const int & grad_surrogate_function_index);
+
+std::vector<at::Tensor> OneSpikeIF_backward(
+  torch::Tensor & grad_spike, torch::Tensor & grad_v_next, torch::Tensor & grad_fire_mask_next, torch::Tensor & grad_s_to_h, torch::Tensor & grad_v_to_h, torch::Tensor & grad_s_to_m_last, torch::Tensor & grad_v_to_m_last);
+
+std::vector<at::Tensor> OneSpikeIF_bptt(
+  torch::Tensor & grad_spike_seq, torch::Tensor & grad_v_next, torch::Tensor & grad_fire_mask_next,
+  torch::Tensor & grad_s_to_h, torch::Tensor & grad_v_to_h, torch::Tensor & grad_s_to_m_last, torch::Tensor & grad_v_to_m_last);
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("LIF_hard_reset_forward", &LIF_hard_reset_forward);
     m.def("LIF_hard_reset_forward_with_grad", &LIF_hard_reset_forward_with_grad);
@@ -65,6 +87,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("IF_hard_reset_fptt_with_grad", &IF_hard_reset_fptt_with_grad);
     m.def("IF_backward", &IF_backward);
     m.def("IF_bptt", &IF_bptt);
+    m.def("OneSpikeIF_hard_reset_forward", &OneSpikeIF_hard_reset_forward);
+    m.def("OneSpikeIF_hard_reset_forward_with_grad", &OneSpikeIF_hard_reset_forward_with_grad);
+    m.def("OneSpikeIF_hard_reset_fptt", &OneSpikeIF_hard_reset_fptt);
+    m.def("OneSpikeIF_hard_reset_fptt_with_grad", &OneSpikeIF_hard_reset_fptt_with_grad);
+    m.def("OneSpikeIF_backward", &OneSpikeIF_backward);
+    m.def("OneSpikeIF_bptt", &OneSpikeIF_bptt);
 }
 
 

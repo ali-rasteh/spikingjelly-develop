@@ -896,3 +896,250 @@ class MultiStepIFNode(IFNode):
             else:
                 spike_seq, self.v = _C_neuron.IF_hard_reset_fptt(dv_seq, self.v, self.v_threshold, self.v_reset)
             return spike_seq
+
+
+
+
+class OneSpikeIFStep(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, v, fire_mask, v_threshold, v_reset, alpha, detach_reset, grad_surrogate_function_index):
+        if v_reset is None:
+            raise NotImplementedError
+
+        spike, v_next, fire_mask_next, grad_s_to_h, grad_v_to_h, grad_s_to_m_last, grad_v_to_m_last = _C_neuron.OneSpikeIF_hard_reset_forward_with_grad(x, v, fire_mask, v_threshold, v_reset, alpha, detach_reset, grad_surrogate_function_index)
+        ctx.save_for_backward(grad_s_to_h, grad_v_to_h, grad_s_to_m_last, grad_v_to_m_last)
+        return spike, v_next, fire_mask_next
+
+    @staticmethod
+    def backward(ctx, grad_spike, grad_v_next, grad_fire_mask_next):
+        grad_x, grad_v, grad_m = _C_neuron.OneSpikeIF_backward(grad_spike, grad_v_next, grad_fire_mask_next, ctx.saved_tensors[0], ctx.saved_tensors[1], ctx.saved_tensors[2], ctx.saved_tensors[3])
+        return grad_x, grad_v, grad_m, None, None, None, None, None
+
+class OneSpikeIFMultiStep(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x_seq, v, fire_mask, v_threshold, v_reset, alpha, detach_reset, grad_surrogate_function_index):
+        if v_reset is None:
+            raise NotImplementedError
+
+        spike_seq, v_next, fire_mask_next, grad_s_to_h, grad_v_to_h, grad_s_to_m_last, grad_v_to_m_last = _C_neuron.OneSpikeIF_hard_reset_fptt_with_grad(x_seq, v, fire_mask, v_threshold, v_reset, alpha, detach_reset, grad_surrogate_function_index)
+        ctx.save_for_backward(grad_s_to_h, grad_v_to_h, grad_s_to_m_last, grad_v_to_m_last)
+        return spike_seq, v_next, fire_mask_next
+
+    @staticmethod
+    def backward(ctx, grad_spike_seq, grad_v_next, grad_fire_mask_next):
+        grad_x_seq, grad_v, grad_m = _C_neuron.OneSpikeIF_bptt(grad_spike_seq, grad_v_next, grad_fire_mask_next, ctx.saved_tensors[0], ctx.saved_tensors[1], ctx.saved_tensors[2], ctx.saved_tensors[3])
+        return grad_x_seq, grad_v, grad_m, None, None, None, None, None
+
+class OneSpikeIFNode(IFNode):
+    def __init__(self, v_threshold=1.0, v_reset=0.0, surrogate_function='ATan', alpha=2.0,
+                 detach_reset=False):
+        super().__init__(v_threshold, v_reset, surrogate_function, alpha, detach_reset)
+        self.fire_mask = None
+
+    def reset(self):
+        super().reset()
+        self.fire_mask = None
+
+    def forward(self, dv: torch.Tensor):
+        if self.v_reset is None:
+            raise NotImplementedError
+        else:
+            if not isinstance(self.v, torch.Tensor):
+                self.v = torch.zeros_like(dv.data)
+                if self.v_reset != 0.0:
+                    self.v.fill_(self.v_reset)
+            if self.fire_mask is None:
+                self.fire_mask = torch.zeros_like(dv.data)
+
+            if self.training:
+                spike, self.v, self.fire_mask = OneSpikeIFStep.apply(dv, self.v, self.fire_mask, self.v_threshold, self.v_reset, self.alpha, self.detach_reset,
+                                              self.grad_surrogate_function_index)
+            else:
+                spike, self.v, self.fire_mask = _C_neuron.OneSpikeIF_hard_reset_forward(dv, self.v, self.fire_mask, self.v_threshold, self.v_reset)
+            return spike
+
+
+class MultiStepOneSpikeIFNode(OneSpikeIFNode):
+    def forward(self, dv_seq: torch.Tensor):
+        if self.v_reset is None:
+            raise NotImplementedError
+        else:
+            if not isinstance(self.v, torch.Tensor):
+                self.v = torch.zeros_like(dv_seq[0].data)
+                if self.v_reset != 0.0:
+                    self.v.fill_(self.v_reset)
+            if self.fire_mask is None:
+                self.fire_mask = torch.zeros_like(dv_seq[0].data)
+
+            if self.training:
+                spike_seq, self.v, self.fire_mask = OneSpikeIFMultiStep.apply(dv_seq, self.v, self.fire_mask, self.v_threshold, self.v_reset, self.alpha,
+                                                       self.detach_reset, self.grad_surrogate_function_index)
+            else:
+                spike_seq, self.v, self.fire_mask = _C_neuron.OneSpikeIF_hard_reset_fptt(dv_seq, self.v, self.fire_mask, self.v_threshold, self.v_reset)
+            return spike_seq
+
+
+import csrc.one_spike_if
+from spikingjelly.clock_driven import surrogate, layer
+import torch
+import torch.nn as nn
+class OneSpikeIFNode(nn.Module):
+    def __init__(self, v_threshold=1.0, v_reset=0.0, surrogate_function=surrogate.Sigmoid()):
+        super().__init__()
+        self.v_threshold = v_threshold
+        self.v_reset = v_reset
+        self.surrogate_function = surrogate_function
+        self.spike = None
+        self.fire_mask = 0
+        if self.v_reset is None:
+            self.v = 0.0
+        else:
+            self.v = self.v_reset
+
+    def neuronal_reset(self):
+        if self.v_reset is None:
+            self.v = self.v - self.spike * self.v_threshold
+        else:
+            self.v = (1 - self.spike) * self.v + self.spike * self.v_reset
+
+    def neuronal_charge(self, dv: torch.Tensor):
+        self.v += dv
+
+    def neuronal_fire(self):
+        self.spike = self.surrogate_function(self.v - self.v_threshold) * (1. - self.fire_mask)
+        self.fire_mask += self.spike
+
+
+    def forward(self, dv: torch.Tensor):
+        self.neuronal_charge(dv)
+        self.neuronal_fire()
+        self.neuronal_reset()
+        return self.spike
+
+    def reset(self):
+        if self.v_reset is None:
+            self.v = 0.0
+        else:
+            self.v = self.v_reset
+
+        self.spike = None
+        self.fire_mask = 0
+
+# # grad check codes for OneSpikeIFNode
+# print('check no grad')
+# with torch.no_grad():
+#     T = 64
+#     N = 16
+#     device = 'cuda:0'
+#     print('check single step')
+#     x = torch.rand([T, N], device=device)
+#     osif_cuda = csrc.one_spike_if.OneSpikeIFNode()
+#     osif_cuda.to(device)
+#     osif_py = OneSpikeIFNode(surrogate_function=surrogate.ATan(alpha=2.))
+#     osif_py.to(device)
+#     osif_cuda.eval()
+#     osif_py.eval()
+#     for t in range(T):
+#         s_cuda = osif_cuda(x[t])
+#         s_py = osif_py(x[t])
+#         print('max s error', (s_cuda - s_py).abs().max().item(), 'max v error', (osif_cuda.v - osif_py.v).abs().max().item())
+#
+#     print('check multi step')
+#     osif_cuda = csrc.one_spike_if.MultiStepOneSpikeIFNode()
+#     osif_cuda.to(device)
+#     osif_py = layer.MultiStepContainer(OneSpikeIFNode(surrogate_function=surrogate.ATan(alpha=2.)))
+#     osif_py.to(device)
+#     osif_cuda.eval()
+#     osif_py.eval()
+#
+#     x = torch.rand([T, N], device=device)
+#     s_py = osif_py(x)
+#     s_cuda = osif_cuda(x)
+#     print('max s error', (s_cuda - s_py).abs().max().item(), 'max v error', (osif_cuda.v - osif_py.module.v).abs().max().item())
+
+
+# print('check with grad')
+
+# T = 4
+# N = 3
+# device = 'cuda:0'
+# print('check single step')
+# x_cuda = torch.rand([T, N], device=device)
+# x_py = x_cuda.detach().clone()
+
+
+# print(x_cuda)
+# print(x_py)
+# osif_cuda = csrc.one_spike_if.OneSpikeIFNode()
+# osif_cuda.to(device)
+# osif_py = OneSpikeIFNode(surrogate_function=surrogate.ATan(alpha=2.))
+# osif_py.to(device)
+# osif_cuda.train()
+# osif_py.train()
+# fr_cuda = 0
+# fr_py = 0
+
+# # test half precision
+# osif_cuda = osif_cuda.half()
+# osif_py = osif_py.half()
+# x_py = x_py.half()
+# x_cuda = x_cuda.half()
+# x_cuda.requires_grad_(True)
+# x_py.requires_grad_(True)
+
+# for t in range(T):
+#     s_cuda = osif_cuda(x_cuda[t])
+#     fr_cuda += s_cuda
+#     s_py = osif_py(x_py[t])
+#     fr_py += s_py
+#     with torch.no_grad():
+#         print(t, 'max s error', (s_cuda - s_py).abs().max().item(), 'max v error', (osif_cuda.v - osif_py.v).abs().max().item())
+#         print(osif_cuda.fire_mask, osif_py.fire_mask)
+# fr_cuda.sum().backward()
+# fr_py.sum().backward()
+# print(x_cuda.grad)
+# print(x_py.grad)
+
+# with torch.no_grad():
+#     print('max x.grad error', (x_cuda.grad - x_py.grad).abs().max().item())
+
+
+
+
+# print('check multi step')
+# osif_cuda = csrc.one_spike_if.MultiStepOneSpikeIFNode()
+# osif_cuda.to(device)
+# osif_py = OneSpikeIFNode(surrogate_function=surrogate.ATan(alpha=2.))
+# osif_py.to(device)
+# osif_cuda.train()
+# osif_py.train()
+
+# x_cuda = torch.rand([T, N], device=device)
+# x_py = x_cuda.detach().clone()
+
+
+# # test half precision
+# osif_cuda = osif_cuda.half()
+# osif_py = osif_py.half()
+# x_py = x_py.half()
+# x_cuda = x_cuda.half()
+
+
+# x_cuda.requires_grad_(True)
+# x_py.requires_grad_(True)
+
+# s_cuda = osif_cuda(x_cuda)
+# s_py = []
+# for t in range(T):
+#     s_py.append(osif_py(x_py[t]).unsqueeze(0))
+# s_py = torch.cat(s_py, 0)
+
+# with torch.no_grad():
+#     print('max s error', (s_cuda - s_py).abs().max().item(), 'max v error', (osif_cuda.v - osif_py.v).abs().max().item())
+
+# s_cuda.sum().backward()
+# s_py.sum().backward()
+# print(x_cuda.grad)
+# print(x_py.grad)
+# with torch.no_grad():
+#     print('max x.grad error', (x_cuda.grad - x_py.grad).abs().max().item())
