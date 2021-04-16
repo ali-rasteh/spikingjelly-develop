@@ -352,8 +352,9 @@ class LIFNode(BaseNode):
 
 class OneSpikeIFNode(BaseNode):
     def __init__(self, v_threshold=1.0, v_reset=0.0, surrogate_function=surrogate.Sigmoid(), detach_reset=False,
-                 monitor_state=False):
+                 monitor_state=False, limit=True):
         super().__init__(v_threshold, v_reset, surrogate_function, detach_reset, monitor_state)
+        self.limit = limit
 
     def neuronal_charge(self, dv: torch.Tensor):
         self.v += dv
@@ -370,8 +371,16 @@ class OneSpikeIFNode(BaseNode):
             else:
                 self.monitor['h'].append(self.v.data.cpu().numpy().copy())
 
-        self.spike = self.surrogate_function(self.v - self.v_threshold) * (1.0 - self.fire_mask)
-        self.fire_mask += self.spike
+        if self.fire_mask is None:
+            self.fire_mask = torch.zeros_like(self.v)
+
+        if self.limit:
+            self.spike = self.surrogate_function(self.v - self.v_threshold) * (1.0 - self.fire_mask)
+            # self.spike = self.surrogate_function((self.v - self.v_threshold) * (1.0 - self.fire_mask) - 1e-12)
+            # self.spike = self.surrogate_function(self.v - self.v_threshold) * self.surrogate_function(1.0 - self.fire_mask - 1e-12)
+            self.fire_mask += self.spike
+        else:
+            self.spike = self.surrogate_function(self.v - self.v_threshold)
         
         if self.monitor:
             self.monitor['s'].append(self.spike.data.cpu().numpy().copy())
@@ -384,7 +393,7 @@ class OneSpikeIFNode(BaseNode):
             self.v = self.v_reset
 
         self.spike = None
-        self.fire_mask = 0
+        self.fire_mask = None
 
         if self.monitor:
             self.monitor = {'h': [], 'v': [], 's': []}
