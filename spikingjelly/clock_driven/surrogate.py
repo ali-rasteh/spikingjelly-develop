@@ -42,11 +42,6 @@ def heaviside(x: torch.Tensor):
     '''
     return (x >= 0).to(x)
 
-
-def heaviside_binary(x: torch.Tensor):
-    return (x >= 0).to(x)
-
-
 def check_manual_grad(primitive_function, spiking_function, eps=1e-5):
     '''
     :param primitive_function: 梯度替代函数的原函数
@@ -631,34 +626,6 @@ class ATan(SurrogateFunctionBase):
     # plt.ylabel('Output')
     # plt.grid(linestyle='--')
     # plt.show()
-
-
-class atan_binary(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, alpha):
-        if x.requires_grad:
-            ctx.save_for_backward(x, alpha)
-        return heaviside_binary(x)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        grad_x = None
-        if ctx.needs_input_grad[0]:
-            grad_x = ctx.saved_tensors[1] / 2 / (1 + (math.pi / 2 * ctx.saved_tensors[1] * ctx.saved_tensors[0]).pow_(2)) * grad_output
-
-        return grad_x, None
-
-class ATan_binary(SurrogateFunctionBase):
-    def __init__(self, alpha=2.0, spiking=True):
-        super().__init__(alpha, spiking)
-
-    @staticmethod
-    def spiking_function(x, alpha):
-        return atan_binary.apply(x, alpha)
-
-    @staticmethod
-    def primitive_function(x: torch.Tensor, alpha):
-        return (math.pi / 2 * alpha * x).atan_() / math.pi + 0.5
 
 
 class nonzero_sign_log_abs(torch.autograd.Function):

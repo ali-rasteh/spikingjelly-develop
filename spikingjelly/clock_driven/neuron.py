@@ -384,7 +384,36 @@ class OneSpikeIFNode(BaseNode):
         
         if self.monitor:
             self.monitor['s'].append(self.spike.data.cpu().numpy().copy())
-            
+
+    def neuronal_reset(self):
+        '''
+        * :ref:`API in English <BaseNode.neuronal_reset-en>`
+
+        .. _BaseNode.neuronal_reset-cn:
+
+        根据当前神经元释放的脉冲，对膜电位进行重置。
+
+        * :ref:`中文API <BaseNode.neuronal_reset-cn>`
+
+        .. _BaseNode.neuronal_reset-en:
+
+
+        Reset the membrane potential according to neurons' output spikes.
+        '''
+        if self.detach_reset:
+            spike = self.spike.detach()
+            # self.fire_mask = self.fire_mask.detach()
+        else:
+            spike = self.spike
+
+        if self.v_reset is None:
+            self.v = self.v - spike * self.v_threshold
+        else:
+            self.v = (1 - spike) * self.v + spike * self.v_reset
+
+        if self.monitor:
+            self.monitor['v'].append(self.v.data.cpu().numpy().copy())
+
     def reset(self):
     
         if self.v_reset is None:
