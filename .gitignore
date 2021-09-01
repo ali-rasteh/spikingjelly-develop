@@ -140,3 +140,9 @@ dmypy.json
 *.bin
 *.dat
 *.pt
+
+# run stuff
+/run/dataset/
+/run/log/
+/run/Test/
+/run/*.ipynb

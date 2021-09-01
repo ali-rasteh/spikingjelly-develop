@@ -22,27 +22,41 @@ torch.backends.cudnn.benchmark = False
 np.random.seed(_seed_)
 
 
+
+class multiply(nn.Module):
+    def __init__(self, multiplier):
+        super().__init__()
+        # self.multiplier = multiplier
+        self.multiplier = nn.Parameter(multiplier*torch.ones(1), requires_grad=True)
+
+    def forward(self,x):
+        result = x*self.multiplier
+        return result
+
+
 class Net(nn.Module):
     def __init__(self, tau, T, v_threshold=1.0, v_reset=None, Readout_mode='latency', warmup=False):
         super().__init__()
         self.T = T
         self.deafult_T = 8
         self.surrogate_function = surrogate.ATan()
-        self.surrogate_function_latency = surrogate.piecewise_quadratic()
+        self.surrogate_function_latency = surrogate.PiecewiseQuadratic()
         self.Readout_mode=Readout_mode
         self.warmup=warmup
 
         self.static_conv = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, padding=1, bias=False)
+            nn.Conv2d(1, 16, kernel_size=3, padding=1, bias=False),
+            multiply(multiplier=1.0)
         )
 
         self.conv = nn.Sequential(
-            # neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True, monitor_state=True),
-            neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True, monitor_state=True),
+            # neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
+            neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
 
             nn.Conv2d(16, 16, kernel_size=3, padding=1, bias=False),
-            # neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True, monitor_state=True),
-            neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True, monitor_state=True),
+            multiply(multiplier=1.0),
+            # neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
+            neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
             # nn.MaxPool2d(2, 2)  # 14 * 14
             layer.FirstSpikePool2d(kernel_size=2, stride=2, padding=0, dilation=1, return_indices=False, ceil_mode=False)  # 14 * 14
         )
@@ -53,12 +67,14 @@ class Net(nn.Module):
         self.fc = nn.Sequential(
             nn.Flatten(),
             nn.Linear(16 * 14 * 14, 100, bias=False),
-            # neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True, monitor_state=True),
-            neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True, monitor_state=True),
+            multiply(multiplier=1.0),
+            # neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
+            neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
             nn.Linear(100, 10, bias=False),
+            multiply(multiplier=1.0),
             # nn.Linear(100, 100, bias=False),
-            neuron.IFNode(v_threshold=Readout_v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True, monitor_state=True)
-            # neuron.OneSpikeIFNode(v_threshold=Readout_v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True, monitor_state=True)
+            neuron.IFNode(v_threshold=Readout_v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True)
+            # neuron.OneSpikeIFNode(v_threshold=Readout_v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True)
             # layer.SynapseFilter(tau=tau, learnable=False)
         )
 
@@ -86,7 +102,7 @@ class Net(nn.Module):
 
 
     def forward(self, x):
-        # reg_loss_list = [torch.zeros((self.T)).to(x.device)]*4
+        reg_loss_list = torch.zeros((4,self.T)).to(x.device)
 
         # for module in self.conv:
         #     if isinstance(module, neuron.OneSpikeIFNode):
@@ -99,7 +115,7 @@ class Net(nn.Module):
 
         out_spikes_counter = self.fc(self.conv(x))
         # out_spikes_counter = out_spikes_counter.reshape((out_spikes_counter.shape[0],10,10))
-        out_potential_counter = self.fc[4].v
+        out_potential_counter = self.fc[-1].v
         latency_score = self.surrogate_function_latency(out_spikes_counter-0.5)
         # latency_score = out_spikes_counter
 
@@ -112,7 +128,7 @@ class Net(nn.Module):
         for t in range(1, self.T):
             out_spikes_counter = out_spikes_counter+self.fc(self.conv(x))
             # out_spikes_counter = out_spikes_counter+self.fc(self.conv(x)).reshape((out_spikes_counter.shape[0],10,10))
-            out_potential_counter = out_potential_counter + self.fc[4].v
+            out_potential_counter = out_potential_counter + self.fc[-1].v
             latency_score = latency_score + self.surrogate_function_latency(out_spikes_counter-0.5)
             # latency_score = latency_score + out_spikes_counter
 
@@ -121,12 +137,16 @@ class Net(nn.Module):
             # reg_loss_list[1][t] = (self.conv[2].spike.sum() / (np.prod(self.conv[2].spike.shape)))
             # reg_loss_list[2][t] = (self.fc[2].spike.sum() / (np.prod(self.fc[2].spike.shape)))
             # reg_loss_list[3][t] = (self.fc[4].spike.sum() / (np.prod(self.fc[4].spike.shape)))
-            # reg_loss_list = torch.stack(reg_loss_list, dim=0)
+        # reg_loss_list = torch.stack(reg_loss_list, dim=0)
+        reg_loss_list = torch.sum(reg_loss_list, dim=0, keepdim=False)
+        # reg_loss_list = torch.mul(reg_loss_list, torch.from_numpy(np.arange(self.T,0,-1)).to(x.device))
 
         # latency_score, _ = torch.max(latency_score, dim=2, keepdim=False)
-        reg_loss=torch.zeros((1), dtype=x.dtype, device=x.device)
+        # reg_loss=torch.zeros((1), dtype=x.dtype, device=x.device)
         # for item in reg_loss_list :
         #     reg_loss += item.max()
+        reg_loss = reg_loss_list.max()
+        # reg_loss = reg_loss_list.sum()
 
 
         if self.Readout_mode=='latency' and not(self.warmup):
@@ -144,6 +164,9 @@ def plot_spikes(net, data_loader, device, nb_plt, batch_size):
         net(img)
         break
     batch_idx = np.random.choice(batch_size, nb_plt, replace=False)
+    for module in net.static_conv:
+        if isinstance(module, multiply):
+            print(module.multiplier)
     for module in net.conv:
         if isinstance(module, neuron.OneSpikeIFNode) or isinstance(module, neuron.IFNode):
             spike_array = np.squeeze(np.asarray(module.monitor['s']))[:,:,0,7,7]
@@ -156,6 +179,8 @@ def plot_spikes(net, data_loader, device, nb_plt, batch_size):
             visualizing.plot_1d_spikes(spikes=s_t_array, title='Spikes of Neurons', xlabel='Simulating Step',
                                        ylabel='Neuron Index', int_x_ticks=True, int_y_ticks=True,
                                        plot_firing_rate=True, firing_rate_map_title='Firing Rate', dpi=200)
+        elif isinstance(module, multiply):
+            print(module.multiplier)
     for module in net.fc:
         if isinstance(module, neuron.OneSpikeIFNode) or isinstance(module, neuron.IFNode):
             spike_array = np.squeeze(np.asarray(module.monitor['s']))[:, :, 0]
@@ -168,6 +193,8 @@ def plot_spikes(net, data_loader, device, nb_plt, batch_size):
             visualizing.plot_1d_spikes(spikes=s_t_array, title='Spikes of Neurons', xlabel='Simulating Step',
                                        ylabel='Neuron Index', int_x_ticks=True, int_y_ticks=True,
                                        plot_firing_rate=True, firing_rate_map_title='Firing Rate', dpi=200)
+        elif isinstance(module, multiply):
+            print(module.multiplier)
     plt.show()
 
 
@@ -214,6 +241,7 @@ def main():
     T = int(input('输入仿真时长，例如“8”\n input simulating steps, e.g., "8": '))
     # tau = float(input('输入LIF神经元的时间常数tau，例如“2.0”\n input membrane time constant, tau, for LIF neurons, e.g., "2.0": '))
     weight_decay = float(input('input weight_decay, e.g., "1e-5": '))
+    # reg_loss_coef = float(input('input reg_loss_coef, e.g., "1e-3": '))
     Readout_mode = input('Readout layer mode, e.g., "frequency" or "potential" or "latency" : ')
     train_epoch = int(input('输入训练轮数，即遍历训练集的次数，例如“100”\n input training epochs, e.g., "100": '))
     warmup_epochs = int(input('input warmup epochs, e.g., "50": '))
@@ -226,6 +254,7 @@ def main():
     # T = 8
     tau = 2.0
     # weight_decay = 1e-5
+    reg_loss_coef = 0
     # Readout_mode = "latency"
     # train_epoch = 10
     # warmup_epochs = 5
@@ -236,6 +265,7 @@ def main():
     print("T = ", T)
     print("tau = ", tau)
     print("weight_decay = ", weight_decay)
+    print("reg_loss_coef = ", reg_loss_coef)
     print("Readout_mode = ", Readout_mode)
     print("train_epoch = ", train_epoch)
     print("warmup_epochs = ", warmup_epochs)
@@ -282,6 +312,7 @@ def main():
         t_start = time.perf_counter()
 
         local_loss = []
+        local_reg_loss = []
         train_accuracy_list = []
         Batch_Num = 0
         for img, label in train_data_loader:
@@ -297,8 +328,10 @@ def main():
             # 损失函数为输出层神经元的脉冲发放频率，与真实类别的MSE
             # 这样的损失函数会使，当类别i输入时，输出层中第i个神经元的脉冲发放频率趋近1，而其他神经元的脉冲发放频率趋近0
             loss = F.mse_loss(out_spikes_counter_frequency, label_one_hot)
-            # loss += reg_loss
+            # print(loss, reg_loss * reg_loss_coef)
             local_loss.append(loss.item())
+            local_reg_loss.append(reg_loss_coef*reg_loss.item())
+            loss += reg_loss * reg_loss_coef
             # log_p_y = log_softmax_fn(out_spikes_counter_frequency)
             # loss = loss_fn(log_p_y, label)
             loss.backward()
@@ -315,6 +348,7 @@ def main():
 
             # print("Batch %i: loss=%.5f, reg_loss=%.5f" % (Batch_Num, loss.item(), reg_loss.item()))
         t_train = time.perf_counter() - t_start
+
         net.eval()
         t_start = time.perf_counter()
         with torch.no_grad():
@@ -356,8 +390,9 @@ def main():
 
         train_accuracy = np.mean(train_accuracy_list)
         mean_loss = np.mean(local_loss)
-        print('epoch={}, loss={:.5f}, t_train={:.5f}, t_test={:.5f}, device={}, dataset_dir={}, batch_size={}, learning_rate={}, T={}, log_dir={}, test_accuracy={:.5f}, train_accuracy={:.5f}, max_test_accuracy={:.5f}, train_times={}'.format(
-                epoch, mean_loss, t_train, t_test, device, dataset_dir, batch_size, learning_rate, T, log_dir, test_accuracy, train_accuracy, max_test_accuracy, train_times))
+        mean_reg_loss = np.mean(local_reg_loss)
+        print('epoch={}, loss={:.5f}, reg_loss={:.5f}, t_train={:.5f}, t_test={:.5f}, device={}, dataset_dir={}, batch_size={}, learning_rate={}, T={}, log_dir={}, test_accuracy={:.5f}, train_accuracy={:.5f}, max_test_accuracy={:.5f}, train_times={}'.format(
+                epoch, mean_loss, mean_reg_loss, t_train, t_test, device, dataset_dir, batch_size, learning_rate, T, log_dir, test_accuracy, train_accuracy, max_test_accuracy, train_times))
 
     plot_spikes(net, test_data_loader, device, nb_plt=batch_size, batch_size=batch_size)
 
