@@ -46,7 +46,7 @@ class Net(nn.Module):
 
         self.static_conv = nn.Sequential(
             nn.Conv2d(1, 16, kernel_size=3, padding=1, bias=False),
-            multiply(multiplier=1.0)
+            # multiply(multiplier=1.0)
         )
 
         self.conv = nn.Sequential(
@@ -54,7 +54,7 @@ class Net(nn.Module):
             neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
 
             nn.Conv2d(16, 16, kernel_size=3, padding=1, bias=False),
-            multiply(multiplier=1.0),
+            # multiply(multiplier=1.0),
             # neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
             neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
             # nn.MaxPool2d(2, 2)  # 14 * 14
@@ -67,11 +67,11 @@ class Net(nn.Module):
         self.fc = nn.Sequential(
             nn.Flatten(),
             nn.Linear(16 * 14 * 14, 100, bias=False),
-            multiply(multiplier=1.0),
+            # multiply(multiplier=1.0),
             # neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
             neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
             nn.Linear(100, 10, bias=False),
-            multiply(multiplier=1.0),
+            # multiply(multiplier=1.0),
             # nn.Linear(100, 100, bias=False),
             neuron.IFNode(v_threshold=Readout_v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True)
             # neuron.OneSpikeIFNode(v_threshold=Readout_v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True)
@@ -155,8 +155,6 @@ class Net(nn.Module):
             return out_potential_counter / self.T, reg_loss
         elif self.Readout_mode == 'frequency':
             return out_spikes_counter / self.T, reg_loss
-        elif self.Readout_mode == 'latency-potential':
-            return latency_score / self.T, (self.T - latency_score), self.fc[-1].v, reg_loss
 
 
 
@@ -246,7 +244,7 @@ def main():
     # tau = float(input('输入LIF神经元的时间常数tau，例如“2.0”\n input membrane time constant, tau, for LIF neurons, e.g., "2.0": '))
     weight_decay = float(input('input weight_decay, e.g., "1e-5": '))
     # reg_loss_coef = float(input('input reg_loss_coef, e.g., "1e-3": '))
-    Readout_mode = input('Readout layer mode, e.g., "frequency" or "potential" or "latency" or "latency-potential": ')
+    Readout_mode = input('Readout layer mode, e.g., "frequency" or "potential" or "latency" : ')
     train_epoch = int(input('输入训练轮数，即遍历训练集的次数，例如“100”\n input training epochs, e.g., "100": '))
     warmup_epochs = int(input('input warmup epochs, e.g., "50": '))
     # log_dir = input('输入保存tensorboard日志文件的位置，例如“./”\n input root directory for saving tensorboard logs, e.g., "./": ')
@@ -302,9 +300,8 @@ def main():
     plot_spikes(net, test_data_loader, device, nb_plt=batch_size, batch_size=batch_size)
     # 使用Adam优化器
     optimizer = torch.optim.Adam(net.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    # log_softmax_fn = torch.nn.LogSoftmax(dim=1)
-    # loss_fn = torch.nn.NLLLoss()
-    loss_fn_CE = nn.CrossEntropyLoss()
+    log_softmax_fn = torch.nn.LogSoftmax(dim=1)
+    loss_fn = torch.nn.NLLLoss()
     train_times = 0
     max_test_accuracy = 0
     for epoch in range(train_epoch):
@@ -328,23 +325,16 @@ def main():
 
             optimizer.zero_grad()
 
-            if Readout_mode != "latency-potential":
-                output, reg_loss = net(img)
-            else:
-                output, spike_time, final_potential, reg_loss = net(img)
+            out_spikes_counter_frequency, reg_loss = net(img)
 
             # 损失函数为输出层神经元的脉冲发放频率，与真实类别的MSE
             # 这样的损失函数会使，当类别i输入时，输出层中第i个神经元的脉冲发放频率趋近1，而其他神经元的脉冲发放频率趋近0
-            if Readout_mode != "latency-potential":
-                loss = F.mse_loss(output, label_one_hot)
-            else:
-                loss = loss_fn_CE(-1 * spike_time, label) + loss_fn_CE(final_potential, label)
-
+            loss = F.mse_loss(out_spikes_counter_frequency, label_one_hot)
             # print(loss, reg_loss * reg_loss_coef)
             local_loss.append(loss.item())
             local_reg_loss.append(reg_loss_coef*reg_loss.item())
             loss += reg_loss * reg_loss_coef
-            # log_p_y = log_softmax_fn(output)
+            # log_p_y = log_softmax_fn(out_spikes_counter_frequency)
             # loss = loss_fn(log_p_y, label)
             loss.backward()
             optimizer.step()
@@ -352,7 +342,7 @@ def main():
             functional.reset_net(net)
 
             # 正确率的计算方法如下。认为输出层中脉冲发放频率最大的神经元的下标i是分类结果
-            accuracy = (output.max(1)[1] == label.to(device)).float().mean().item()
+            accuracy = (out_spikes_counter_frequency.max(1)[1] == label.to(device)).float().mean().item()
             if train_times % 256 == 0:
                 writer.add_scalar('train_accuracy', accuracy, train_times)
             train_accuracy_list.append(accuracy)
@@ -369,12 +359,9 @@ def main():
             correct_sum = 0
             for img, label in test_data_loader:
                 img = img.to(device)
-                if Readout_mode != "latency-potential":
-                    output, reg_loss = net(img)
-                else:
-                    output, spike_time, final_potential, reg_loss = net(img)
+                out_spikes_counter_frequency, reg_loss = net(img)
 
-                correct_sum += (output.max(1)[1] == label.to(device)).float().sum().item()
+                correct_sum += (out_spikes_counter_frequency.max(1)[1] == label.to(device)).float().sum().item()
                 test_sum += label.numel()
                 functional.reset_net(net)
             test_accuracy = correct_sum / test_sum
@@ -394,9 +381,9 @@ def main():
             # correct_sum = 0
             # for img, label in train_data_loader:
                 # img = img.to(device)
-                # output, reg_loss = net(img)
+                # out_spikes_counter_frequency, reg_loss = net(img)
 
-                # correct_sum += (output.max(1)[1] == label.to(device)).float().sum().item()
+                # correct_sum += (out_spikes_counter_frequency.max(1)[1] == label.to(device)).float().sum().item()
                 # train_sum += label.numel()
                 # functional.reset_net(net)
             # train_accuracy = correct_sum / train_sum

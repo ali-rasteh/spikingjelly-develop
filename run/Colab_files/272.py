@@ -46,7 +46,7 @@ class Net(nn.Module):
 
         self.static_conv = nn.Sequential(
             nn.Conv2d(1, 16, kernel_size=3, padding=1, bias=False),
-            multiply(multiplier=1.0)
+            # multiply(multiplier=1.0)
         )
 
         self.conv = nn.Sequential(
@@ -54,7 +54,7 @@ class Net(nn.Module):
             neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
 
             nn.Conv2d(16, 16, kernel_size=3, padding=1, bias=False),
-            multiply(multiplier=1.0),
+            # multiply(multiplier=1.0),
             # neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
             neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
             # nn.MaxPool2d(2, 2)  # 14 * 14
@@ -67,11 +67,11 @@ class Net(nn.Module):
         self.fc = nn.Sequential(
             nn.Flatten(),
             nn.Linear(16 * 14 * 14, 100, bias=False),
-            multiply(multiplier=1.0),
+            # multiply(multiplier=1.0),
             # neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
             neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
             nn.Linear(100, 10, bias=False),
-            multiply(multiplier=1.0),
+            # multiply(multiplier=1.0),
             # nn.Linear(100, 100, bias=False),
             neuron.IFNode(v_threshold=Readout_v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True)
             # neuron.OneSpikeIFNode(v_threshold=Readout_v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True)
