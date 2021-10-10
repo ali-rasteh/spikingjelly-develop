@@ -45,17 +45,25 @@ class Net(nn.Module):
         self.warmup=warmup
 
         self.static_conv = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, padding=1, bias=False),
-            multiply(multiplier=1.0)
+            nn.Conv2d(3, 32, kernel_size=3, padding=1, bias=False),
+            # multiply(multiplier=1.0)
         )
 
         self.conv = nn.Sequential(
-            neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
+            neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
 
-            nn.Conv2d(16, 16, kernel_size=3, padding=1, bias=False),
-            multiply(multiplier=1.0),
-            neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
-            layer.FirstSpikePool2d(kernel_size=2, stride=2, padding=0, dilation=1, return_indices=False, ceil_mode=False)  # 14 * 14
+            nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False),
+            # multiply(multiplier=1.0),
+            neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
+            layer.FirstSpikePool2d(kernel_size=2, stride=2, padding=0, dilation=1, return_indices=False, ceil_mode=False),  # 16 * 16
+
+            nn.Conv2d(32, 64, kernel_size=3, padding=1, bias=False),
+            neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
+            layer.FirstSpikePool2d(kernel_size=2, stride=2, padding=0, dilation=1, return_indices=False, ceil_mode=False),  # 8 * 8
+
+            nn.Conv2d(64, 128, kernel_size=3, padding=1, bias=False),
+            neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
+            layer.FirstSpikePool2d(kernel_size=2, stride=2, padding=0, dilation=1, return_indices=False, ceil_mode=False)  # 4 * 4
         )
         if self.Readout_mode=='potential' or (self.Readout_mode=='latency' and self.warmup):
             Readout_v_threshold = math.inf
@@ -63,11 +71,11 @@ class Net(nn.Module):
             Readout_v_threshold = v_threshold
         self.fc = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(16 * 14 * 14, 100, bias=False),
-            multiply(multiplier=1.0),
-            neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
+            nn.Linear(128 * 4 * 4, 100, bias=False),
+            # multiply(multiplier=1.0),
+            neuron.IFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
             nn.Linear(100, 10, bias=False),
-            multiply(multiplier=1.0),
+            # multiply(multiplier=1.0),
             # nn.Linear(100, 100, bias=False),
             neuron.IFNode(v_threshold=Readout_v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True)
         )
@@ -83,6 +91,16 @@ class Net(nn.Module):
         # for module in self.fc:
         #     if hasattr(module, 'weight'):
         #         module.weight = nn.Parameter(module.weight * (self.deafult_T/self.T))
+
+
+    # def calc_reg_loss(self, reg_loss_list, step):
+    #     reg_loss_list_tmp = reg_loss_list
+
+    #     reg_loss_list_tmp[0][step] = self.conv[0].spike.sum()/(np.prod(self.conv[0].spike.shape))
+    #     reg_loss_list_tmp[1][step] = self.conv[2].spike.sum()/(np.prod(self.conv[2].spike.shape))
+    #     reg_loss_list_tmp[2][step] = self.fc[2].spike.sum()/(np.prod(self.fc[2].spike.shape))
+    #     reg_loss_list_tmp[3][step] = self.fc[4].spike.sum()/(np.prod(self.fc[4].spike.shape))
+    #     return reg_loss_list_tmp
 
 
     def forward(self, x):
@@ -140,7 +158,7 @@ class Net(nn.Module):
         elif self.Readout_mode == 'frequency':
             return out_spikes_counter / self.T, reg_loss
         elif self.Readout_mode == 'latency-potential':
-            return latency_score / self.T, (self.T - latency_score), self.fc[-1].v, reg_loss
+            return self.fc[-1].v, (self.T - latency_score), self.fc[-1].v, reg_loss
 
 
 
@@ -156,12 +174,12 @@ def plot_spikes(net, data_loader, device, nb_plt, batch_size):
     for module in net.conv:
         if isinstance(module, neuron.OneSpikeIFNode) or isinstance(module, neuron.IFNode):
             print("v_threshold = ", module.v_threshold)
-            spike_array = np.squeeze(np.asarray(module.monitor['s']))[:,:,0,7,7]
+            spike_array = np.squeeze(np.asarray(module.monitor['s']))[:,:,0,0,0]
             s_t_array = spike_array.T  # s_t_array[i][j]表示神经元i在j时刻释放的脉冲，为0或1
             visualizing.plot_1d_spikes(spikes=s_t_array, title='Spikes of Neurons', xlabel='Simulating Step',
                                        ylabel='Neuron Index', int_x_ticks=True, int_y_ticks=True,
                                        plot_firing_rate=True, firing_rate_map_title='Firing Rate', dpi=200)
-            spike_array = np.squeeze(np.asarray(module.monitor['s']))[:,0,0,7,:]
+            spike_array = np.squeeze(np.asarray(module.monitor['s']))[:,0,0,0,:]
             s_t_array = spike_array.T  # s_t_array[i][j]表示神经元i在j时刻释放的脉冲，为0或1
             visualizing.plot_1d_spikes(spikes=s_t_array, title='Spikes of Neurons', xlabel='Simulating Step',
                                        ylabel='Neuron Index', int_x_ticks=True, int_y_ticks=True,
@@ -262,7 +280,7 @@ def main():
 
     # 初始化数据加载器
     train_data_loader = torch.utils.data.DataLoader(
-        dataset=torchvision.datasets.FashionMNIST(
+        dataset=torchvision.datasets.CIFAR10(
             root=dataset_dir,
             train=True,
             transform=torchvision.transforms.ToTensor(),
@@ -271,7 +289,7 @@ def main():
         shuffle=True,
         drop_last=True)
     test_data_loader = torch.utils.data.DataLoader(
-        dataset=torchvision.datasets.FashionMNIST(
+        dataset=torchvision.datasets.CIFAR10(
             root=dataset_dir,
             train=False,
             transform=torchvision.transforms.ToTensor(),
@@ -282,7 +300,7 @@ def main():
 
     # 初始化网络
     net = Net(tau=tau, T=T, Readout_mode=Readout_mode, warmup=(warmup_epochs>0)).to(device)
-    # net = torch.load(log_dir + 'net_last.pt')
+    # net = torch.load(log_dir + '280.pt')
     plot_spikes(net, test_data_loader, device, nb_plt=batch_size, batch_size=batch_size)
     # 使用Adam优化器
     optimizer = torch.optim.Adam(net.parameters(), lr=learning_rate, weight_decay=weight_decay)
