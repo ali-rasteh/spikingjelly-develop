@@ -45,15 +45,15 @@ class Net(nn.Module):
         self.warmup=warmup
 
         self.static_conv = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, padding=1, bias=False),
-            multiply(multiplier=1.0)
+            nn.Conv2d(1, 16, kernel_size=3, padding=1, bias=True),
+            # multiply(multiplier=1.0)
         )
 
         self.conv = nn.Sequential(
             neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
 
             nn.Conv2d(16, 16, kernel_size=3, padding=1, bias=False),
-            multiply(multiplier=1.0),
+            # multiply(multiplier=1.0),
             neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
             layer.FirstSpikePool2d(kernel_size=2, stride=2, padding=0, dilation=1, return_indices=False, ceil_mode=False)  # 14 * 14
         )
@@ -64,10 +64,10 @@ class Net(nn.Module):
         self.fc = nn.Sequential(
             nn.Flatten(),
             nn.Linear(16 * 14 * 14, 100, bias=False),
-            multiply(multiplier=1.0),
+            # multiply(multiplier=1.0),
             neuron.OneSpikeIFNode(v_threshold=v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True),
             nn.Linear(100, 10, bias=False),
-            multiply(multiplier=1.0),
+            # multiply(multiplier=1.0),
             # nn.Linear(100, 100, bias=False),
             neuron.IFNode(v_threshold=Readout_v_threshold, v_reset=v_reset, surrogate_function=self.surrogate_function, detach_reset=True, monitor_state=True)
         )

@@ -50,8 +50,8 @@ class BaseNode(nn.Module):
         This class is the base class of differentiable spiking neurons.
         '''
         super().__init__()
-        self.v_threshold = v_threshold
-        # self.v_threshold = nn.Parameter(v_threshold*torch.ones(1), requires_grad=True)
+        # self.v_threshold = v_threshold
+        self.v_threshold = nn.Parameter(v_threshold*torch.ones(1), requires_grad=True)
         self.v_reset = v_reset
         self.detach_reset = detach_reset
         self.surrogate_function = surrogate_function
